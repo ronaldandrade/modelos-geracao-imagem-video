@@ -4,6 +4,7 @@ date: "2026-11-20"
 description: "Uma dissecação matemática e prática de como funcionam os modelos modernos de síntese visual: por que saímos de GANs para difusão, o que o Flow Matching do Flux e do SD3 realmente muda, e como Wan2.1 e HunyuanVideo usam 3D Causal VAEs para vídeo."
 tags: ["Visão Computacional", "Deep Learning", "Difusão", "Flow Matching", "Vídeo Generativo"]
 author: "Ronald Andrade"
+cover: "./imagens/flux_flow_matching_mmdit.jpg"
 readingTime: "15 min"
 difficulty: "intermediate"
 ---
@@ -120,6 +121,8 @@ O Flux.1 usa uma variação: 19 blocos com fluxos duplos (como no MMDiT) seguido
 
 É essa capacidade do T5 de ler prompts densos somada à flexibilidade do MMDiT que permite ao Flux renderizar palavras legíveis em cartazes e rótulos, algo que o Stable Diffusion 1.5 errava quase sempre.
 
+![Ilustração conceitual da geração de imagens por Flow Matching e MMDiT em modelos como Flux.1 e Stable Diffusion 3.5: da esquerda para a direita, ruído gaussiano puro se organiza ao longo de vetores retos e paralelos em ciano e âmbar até formar uma cena noturna chuvosa fotorrealista de uma cafeteria de esquina com o letreiro em neon "FLUX" perfeitamente legível na vitrine.](./imagens/flux_flow_matching_mmdit.jpg)
+
 ## 5. De Imagem para Vídeo: A Quarta Dimensão e a Explosão de Dados
 
 Se gerar uma imagem já exige compactação latente, gerar vídeo é ordens de grandeza mais desafiador. Um vídeo adiciona a dimensão temporal $T$:
@@ -153,6 +156,8 @@ O tensor latente $(31 \times 90 \times 160)$ é fatiado em patches. Wan2.1 e Hun
 
 O número de tokens cai de 435.600 para 111.600: uma sequência **3,9 vezes menor** e uma matriz de atenção **15 vezes menor**. Alguns modelos agrupam também no tempo (o CogVideoX 1.5 usa patch temporal 2); com $2 \times 2 \times 2$, seriam 57.600 tokens, cerca de 57 vezes menos atenção. Mesmo com o VAE 3D, dezenas de milhares de tokens continuam sendo o principal custo, e é por isso que boa parte da pesquisa recente em vídeo é sobre atenção esparsa e eficiente.
 
+![Visualização tridimensional do pipeline de vídeo com 3D Causal VAE e Spacetime Patches usado por modelos como Wan2.1 e HunyuanVideo: cinco quadros translúcidos de uma onda oceânica em sequência são comprimidos em um cubo latente 3D subdividido em pequenos blocos volumétricos translúcidos (voxels em ciano, azul e âmbar) que se destacam em fila formando a sequência de tokens para o Transformer.](./imagens/spacetime_patches_video_3d.jpg)
+
 ## 6. Modelo ou produto? Os casos do Seedance e do Nano Banana
 
 Nas redes sociais e comunidades de criadores, nomes como **Seedance** e **Nano Banana** aparecem com frequência associados a imagens e vídeos hiper-realistas. Os dois são modelos fundacionais de grandes laboratórios, e vale entender o que cada um trouxe.
@@ -167,10 +172,14 @@ A família Seedance vem do time Seed da ByteDance (a empresa por trás do TikTok
 
 O Seedance não está sozinho no áudio nativo: Veo 3 (Google, maio de 2025), Sora 2 (OpenAI, setembro de 2025), Wan 2.5 e Kling 2.6 também geram som junto com a imagem. Em 2026, vídeo mudo virou exceção entre os modelos de ponta.
 
+![Ilustração conceitual da geração conjunta de áudio e vídeo (DiT de duas ramificações do Seedance 1.5 pro) e das referências de vídeo do Seedance 2.x: à esquerda, uma silhueta wireframe ciano de uma bailarina em salto transfere sua trajetória de movimento para uma bailarina fotorrealista ao centro, envolvida simultaneamente por uma fita translúcida de quadros de vídeo e por uma forma de onda sonora dourada sincronizada com ondas concêntricas no chão.](./imagens/seedance_dual_branch_audiovisual.jpg)
+
 ### Nano Banana: o modelo de imagem do Gemini
 Nano Banana é o apelido do modelo de imagem do Google, que viralizou com esse codinome antes de ser anunciado como **Gemini 2.5 Flash Image** (agosto de 2025). Vieram depois o **Nano Banana Pro** (novembro de 2025) e o **Nano Banana 2** (Gemini 3.1 Flash Image, fevereiro de 2026), hoje o padrão no app do Gemini.
 
 A diferença em relação a um Flux ou SD3 é que a geração de imagem é uma capacidade nativa de um modelo multimodal: o mesmo modelo que entende texto e imagens também edita e gera. Isso explica a força em edição por conversa ("troque o fundo", "mantenha o rosto") e em consistência de personagem entre várias imagens. O Google não publicou os detalhes da arquitetura. As imagens saem com marca d'água **SynthID**, invisível a olho nu.
+
+![Tríptico editorial representando consistência de personagem entre várias imagens, ponto forte do Nano Banana e alvo dos pipelines de produto: três quadros cinematográficos ligados por curvas douradas e uma linha do tempo inferior mantêm exatamente a mesma personagem de jaqueta amarelo-dourada em cenários distintos, com o quadro central destacando uma malha geométrica de pontos faciais e contorno luminoso de máscara de segmentação entre o primeiro e o último quadro.](./imagens/nano_banana_orquestracao_multimodal.jpg)
 
 ### Onde está a engenharia de produto
 A camada de produto existe, mas fica em volta desses modelos. Vários sites de terceiros usam "banana" no nome e repassam pedidos para APIs como o Nano Banana, o Veo ou o Seedance. Fluxos de trabalho em ferramentas como o ComfyUI encadeiam encoders de identidade facial (IP-Adapter), máscaras de segmentação para inpainting e controle de primeiro e último quadro (*first & last frame*). Separar quem treina o backbone de quem constrói a esteira em volta ajuda a enxergar onde está a inovação matemática e onde está a engenharia de software.
@@ -195,3 +204,20 @@ Entender a evolução desses modelos mostra que o salto de qualidade recente nã
 4. O vídeo exige **atenção espaço-temporal estruturada**; quem domina o 3D Causal VAE e o custo da atenção domina o tempo de computação.
 
 Todo o código com os experimentos do Flow Matching em 2D e o cálculo de atenção dos patches 3D está documentado e reproduzível no repositório do projeto.
+
+## Referências
+
+1. **DDPM (Denoising Diffusion Probabilistic Models):** Ho, J., Jain, A., & Abbeel, P. (2020). *Denoising Diffusion Probabilistic Models*. Advances in Neural Information Processing Systems (NeurIPS 2020). [arXiv:2006.11239](https://arxiv.org/abs/2006.11239).
+2. **Latent Diffusion (Stable Diffusion):** Rombach, R., Blattmann, A., Lorenz, D., Esser, P., & Ommer, B. (2022). *High-Resolution Image Synthesis with Latent Diffusion Models*. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR 2022). [arXiv:2112.10752](https://arxiv.org/abs/2112.10752).
+3. **Flow Matching:** Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nicklas, M., & Le, M. (2022). *Flow Matching for Generative Modeling*. International Conference on Learning Representations (ICLR 2023). [arXiv:2210.02747](https://arxiv.org/abs/2210.02747).
+4. **Rectified Flow:** Liu, X., Gong, C., & Liu, Q. (2022). *Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow*. International Conference on Learning Representations (ICLR 2023). [arXiv:2209.03003](https://arxiv.org/abs/2209.03003).
+5. **Diffusion Transformers (DiT):** Peebles, W., & Xie, S. (2023). *Scalable Diffusion Models with Transformers*. IEEE/CVF International Conference on Computer Vision (ICCV 2023). [arXiv:2212.09748](https://arxiv.org/abs/2212.09748).
+6. **Scaling Rectified Flow Transformers (SD3 / MMDiT):** Esser, P., Kulal, S., Blattmann, A., et al. (2024). *Scaling Rectified Flow Transformers for High-Resolution Image Synthesis*. International Conference on Machine Learning (ICML 2024). [arXiv:2403.03206](https://arxiv.org/abs/2403.03206).
+7. **Wan2.1 (3D Causal VAE & Video DiT):** Wan Team, Alibaba Group (2025). *Wan: Open and Advanced Large-Scale Video Generative Models*. [arXiv:2503.20314](https://arxiv.org/abs/2503.20314).
+8. **HunyuanVideo:** Tencent Hunyuan Team (2024). *HunyuanVideo: A Systematic Framework for Large Video Generation Models*. [arXiv:2412.03603](https://arxiv.org/abs/2412.03603).
+9. **VBench (Avaliação de Vídeo):** Huang, Z., He, Y., Yu, J., et al. (2024). *VBench: Comprehensive Benchmark Suite for Video Generative Models*. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR 2024). [arXiv:2311.17982](https://arxiv.org/abs/2311.17982).
+10. **DDIM:** Song, J., Meng, C., & Ermon, S. (2020). *Denoising Diffusion Implicit Models*. International Conference on Learning Representations (ICLR 2021). [arXiv:2010.02502](https://arxiv.org/abs/2010.02502).
+11. **CogVideoX:** Yang, Z., Teng, J., Zheng, W., et al. (2024). *CogVideoX: Text-to-Video Diffusion Models with An Expert Transformer*. International Conference on Learning Representations (ICLR 2025). [arXiv:2408.06072](https://arxiv.org/abs/2408.06072).
+12. **Seedance 1.5 pro:** ByteDance Seed (2025). *Seedance 1.5 pro: A Native Audio-Visual Joint Generation Foundation Model*. [arXiv:2512.13507](https://arxiv.org/abs/2512.13507).
+13. **Seedance 2.0:** ByteDance Seed (2026). *Seedance 2.0: Advancing Video Generation for World Complexity*. [arXiv:2604.14148](https://arxiv.org/abs/2604.14148).
+14. **Nano Banana:** Google (2025). *Introducing Gemini 2.5 Flash Image, our state-of-the-art image model*. [Google Developers Blog](https://developers.googleblog.com/en/introducing-gemini-25-flash-image/).
