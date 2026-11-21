@@ -135,7 +135,30 @@ O tensor latente $(30 \times 90 \times 160)$ é fatiado em cubos de tamanho $2 \
 
 O número total de tokens cai de 432.000 para apenas 54.000. Isso representa uma **redução de 8 vezes no tamanho da sequência** e um alívio de **64 vezes no tamanho da matriz de atenção**.
 
-## 6. Por que os modelos de vídeo ainda erram a física?
+## 6. Modelos de vitrine: o que roda por trás de nomes como Seedance e Nano Banana?
+
+Nas redes sociais e comunidades de criadores, nomes como **Seedance** e **Nano Banana** aparecem com frequência associados a vídeos hiper-realistas. Vale separar o que é arquitetura fundacional e o que é engenharia de produto.
+
+### ByteDance Seedance: o DiT de duas ramificações
+Desenvolvido pela ByteDance (a mesma empresa por trás do TikTok e do ecossistema Doubao/Dreamina), a família Seedance (versões 1.0, 2.0 e 2.5) ataca um dos maiores gargalos dos geradores de vídeo: o silêncio.
+
+Modelos comuns geram um vídeo mudo e dependem de ferramentas externas para dublagem ou efeitos sonoros. O Seedance implementou uma arquitetura **Dual-branch DiT**:
+- Uma ramificação do Transformer processa os patches espaço-temporais do vídeo no espaço latente 3D.
+- Uma segunda ramificação processa simultaneamente representações latentes de áudio.
+
+Como as atenções das duas ramificações se cruzam durante o processo de amostragem, o modelo aprende a sincronizar movimentos labiais com os fonemas e a disparar sons ambientes (como passos ou portas batendo) exatamente no frame em que o impacto visual acontece. Além disso, o Seedance se apoia fortemente no paradigma **Reference-to-Video (R2V)**: o usuário pode alimentar um vídeo curto de referência com um movimento de câmera ou coreografia corporal, e o modelo transfere essa trajetória física para um novo personagem sem deformar a sua identidade.
+
+### Nano Banana: estúdios orquestradores e a ilusão do modelo único
+Por outro lado, iniciativas como o ecossistema **Nano Banana** (e estúdios semelhantes como CyberBanana) ilustram outro lado da indústria: a camada de produto.
+
+Em vez de ser uma arquitetura matemática treinada do zero em dezenas de milhões de dólares de GPU, plataformas sob a marca Nano Banana funcionam como **hubs de orquestração multimodal**. Elas combinam:
+1. Modelos de imagem de alta definição com renderização apurada de texto e consistência de iluminação (frequentemente ancorados na infraestrutura do Google Gemini / Imagen, incluindo marcas d'água digitais imperceptíveis como o **SynthID**).
+2. Motores de vídeo de ponta conectados via API ou instâncias dedicadas, alternando entre o **Google Veo** (com seu controle apurado de lente cinematográfica), o próprio **Seedance** da ByteDance e o **MiniMax**.
+3. **Pipelines de consistência de identidade:** a sensação de que o modelo "nunca erra o rosto" não vem de um único prompt milagroso, mas sim de uma esteira de engenharia que combina encoders de características faciais (como IP-Adapter), máscaras automáticas de segmentação para inpainting e interpolação forçada entre primeiro e último quadro (*first & last frame control*).
+
+Entender essa divisão entre quem treina o backbone (o DiT massivo) e quem constrói o pipeline de amarração de identidade ajuda a enxergar onde está a inovação matemática e onde está a pura engenharia de software.
+
+## 7. Por que os modelos de vídeo ainda erram a física?
 
 Apesar do realismo visual atingido por Wan2.1, Kling e Runway Gen-3, qualquer usuário atento nota falhas recorrentes: dedos que se fundem ao segurar uma xícara, pessoas que se viram de costas e perdem acessórios, ou líquidos que escorrem sem gravidade uniforme.
 
@@ -145,7 +168,7 @@ Eles operam como aproximadores estatísticos de densidade de probabilidade no es
 
 Quando o modelo precisa interpolar posições em que oclusões complexas acontecem, a perda do Flow Matching busca a solução estatisticamente mais provável dentro da distribuição. Em casos ambíguos, a rede minimiza o erro criando transições plásticas contínuas, gerando membros extras ou teletransportando objetos.
 
-## 7. O que fica desse panorama
+## 8. O que fica desse panorama
 
 Entender a evolução desses modelos mostra que o salto de qualidade recente não foi mágica nem apenas aumento indiscriminado de dados de treino:
 

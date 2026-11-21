@@ -179,10 +179,26 @@ $$
 | **Sora** | OpenAI | Vídeo | Spacetime DiT em escala massiva | Difusão latente em patches 3D | GPT-recaptioner + MLLM | Pioneiro na formulação de patches 3D latentes em resolução flexível de aspecto e duração |
 | **Kling 1.5 / 2.0** | Kuaishou | Vídeo | 3D DiT proprietário | Flow Matching proprietário | MLLM multilíngue | Duração de até 2 a 3 minutos, simulação superior de movimentos humanos e mecânicos |
 | **Runway Gen-3 Alpha** | Runway | Vídeo | Spatiotemporal DiT | Difusão latente | Text Encoder + Motion Controllers | Alta fidelidade em controle cinematográfico de câmera e consistência de iluminação |
+| **ByteDance Seedance (1.0 / 2.0 / 2.5)** | ByteDance | Vídeo + Áudio | Dual-branch DiT | Flow Matching / Difusão | MLLM Doubao / Seed | Geração audiovisual sincronizada nativa (vídeo + efeitos sonoros/foley + lip-sync em pipeline unificado); forte suporte a vídeo de referência (R2V) |
+| **Google Veo (Veo 2 / 3)** | Google DeepMind | Vídeo | Spatiotemporal DiT | Latent Diffusion | Gemini multimodal text encoder | Compreensão cinemática densa de comandos de lente, enquadramento e física de fluidos |
 
 ---
 
 ## 4. O Mecanismo de Condicionamento de Texto
+
+### 4.1 Fundação vs. Produto: O Caso de Ecossistemas como Seedance e Nano Banana
+
+No mercado atual, há uma confusão frequente entre **modelos fundacionais** e **plataformas de produto/estúdios orquestradores**:
+
+1. **Modelos Fundacionais (como o ByteDance Seedance):**
+   - É um modelo base treinado do zero em clusters de milhares de GPUs.
+   - O **Seedance** (usado no ecossistema Doubao/Dreamina da ByteDance) inovou ao introduzir uma arquitetura **Dual-branch DiT**: enquanto uma ramificação processa os patches espaço-temporais do vídeo, outra ramificação do Transformer gera o áudio (efeitos sonoros, ambiência e fonemas de fala sincronizados) simultaneamente, resolvendo nativamente o problema de lip-sync que antes exigia redes separadas de pós-processamento.
+   - Suporta **Reference-to-Video (R2V)**: além de texto, recebe vídeos de referência para transferir trajetória de câmera ou coreografia física sem distorcer o sujeito.
+
+2. **Ecossistemas e Orquestradores (como o Nano Banana / CyberBanana):**
+   - Não são necessariamente uma arquitetura matemática isolada treinada do zero em dezenas de milhões de dólares.
+   - Funcionam como **suítes de produção multimodal**: conectam modelos de imagem de ponta (como variantes integradas ao Gemini/Imagen com marca d'água SynthID, Flux ou SDXL com LoRAs de estilo) a pipelines de vídeo de terceiros ou proprietários (como Google Veo, Seedance, MiniMax).
+   - O diferencial técnico desses ecossistemas está no **pipeline de consistência de personagem e controle de cena**: encadeamento de encoders de rosto (IP-Adapter), inpainting guiado por máscara, interpolação de quadros-chave (*first & last frame control*) e filtros de alinhamento estético antes e depois da amostragem.
 
 A qualidade do resultado visual depende diretamente da capacidade do modelo de compreender o prompt:
 
