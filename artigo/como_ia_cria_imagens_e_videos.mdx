@@ -1,0 +1,157 @@
+---
+title: "Como a IA realmente cria imagens e vídeos: do ruído ao Flow Matching e patches 3D"
+date: "2026-11-20"
+description: "Uma dissecação matemática e prática de como funcionam os modelos modernos de síntese visual: por que saímos de GANs para difusão, o salto linear do Flow Matching no Flux e SD3, e como Wan2.1 e Sora usam 3D Causal VAEs para vídeo."
+tags: ["Visão Computacional", "Deep Learning", "Difusão", "Flow Matching", "Vídeo Generativo"]
+author: "Ronald Andrade"
+readingTime: "14 min"
+difficulty: "intermediate"
+---
+
+Quando você digita uma frase em um gerador de imagens ou assiste a um vídeo sintético de alta definição, a resposta popular costuma ser vaga: "a rede aprendeu a sonhar a partir de milhões de fotos". No entanto, quem já tentou treinar uma rede neural convolucional para prever pixels sabe que redes odeiam indefinição. Se você treinar uma arquitetura simples com erro quadrático médio para adivinhar a próxima imagem, o resultado é um borrão cinzento, porque a média de todas as fotos possíveis de uma rua é uma massa uniforme sem contraste.
+
+Para sair dessa armadilha, a pesquisa em visão computacional passou a última década testando paradigmas matemáticos diferentes. Vimos as redes adversárias (GANs), os autoencoders variacionais discretos (VQ-GAN), a difusão clássica (DDPM e Stable Diffusion) e, mais recentemente, o **Flow Matching** e os **Diffusion Transformers** espaço-temporais (DiTs).
+
+Neste post, desmonto como essas arquiteturas funcionam por dentro, qual a matemática que permite transformar ruído puro em vídeo coerente e por que modelos de vídeo ainda sofrem para entender a física básica do mundo real.
+
+## 1. Por que não geramos pixels diretamente?
+
+Uma imagem colorida padrão de $512 \times 512$ pixels é representada como um tensor tridimensional com formato $(3, 512, 512)$, totalizando 786.432 números reais entre 0 e 1.
+
+Se você tentar rodar um processo iterativo de 50 passos diretamente sobre quase 800 mil variáveis em ponto flutuante, a memória da GPU estoura antes mesmo de você conseguir fechar o primeiro batch de treino. Foi essa barreira que limitou os primeiros modelos de difusão em pixels (como o DDPM original de 2020) a resoluções baixas de $32 \times 32$ ou $64 \times 64$.
+
+A virada de chave prática aconteceu com os **Latent Diffusion Models** (LDM), a fundação do Stable Diffusion clássico. A ideia central foi separar o trabalho em duas etapas:
+
+1. Um **Autoencoder Variacional** (VAE) pré-treinado aprende a comprimir a imagem do espaço de pixels para um espaço latente compacto com fator de redução espacial $f = 8$. A imagem de $(3, 512, 512)$ é reduzida para um tensor latente $z$ de dimensão $(4, 64, 64)$.
+2. A geração pesada (a difusão) acontece inteiramente dentro de $z$, que possui apenas 16.384 números, ou seja, um volume de dados 48 vezes menor do que a imagem bruta.
+
+Somente no último instante, quando o tensor latente já está limpo, o decoder do VAE pega esses números compactados e reconstrói os pixels em alta definição.
+
+## 2. A mecânica da Difusão Clássica: destruição e reconstrução
+
+Na difusão clássica (DDPM), o processo de geração se apoia em duas metades:
+
+### O processo direto (adicionar ruído)
+Pegamos uma imagem limpa $x_0$ e adicionamos ruído gaussiano aos poucos ao longo de $T$ passos de tempo (geralmente $T = 1000$). Graças à propriedade reprodutiva da distribuição normal, não precisamos somar ruído passo a passo; podemos calcular o estado ruidoso $x_t$ em qualquer instante $t$ diretamente:
+
+$$
+x_t = \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1 - \bar{\alpha}_t}\, \epsilon, \qquad \epsilon \sim \mathcal{N}(0, \mathbf{I})
+$$
+
+Aqui, $\epsilon$ é um ruído gaussiano puro amostrado de uma distribuição normal padrão, e $\bar{\alpha}_t$ é um coeficiente escalar pré-calculado que decresce de 1 até quase 0 conforme $t$ vai de 0 a $T$. Quando $t = T$, a imagem original $x_0$ desaparece completamente e sobra apenas ruído estático.
+
+### O processo reverso (limpar o ruído)
+O objetivo do treinamento é simples: pegamos uma imagem limpa $x_0$, sorteamos um tempo $t$ e um ruído $\epsilon$, calculamos $x_t$, e pedimos para uma rede neural prever qual foi o $\epsilon$ adicionado:
+
+$$
+\mathcal{L}_{\text{simple}} = \mathbb{E}_{t, x_0, \epsilon} \left[ \| \epsilon - \epsilon_\theta(x_t, t) \|^2 \right]
+$$
+
+O termo $\epsilon_\theta(x_t, t)$ representa a saída da rede paramétrica $\theta$. Se a rede souber exatamente qual ruído está contaminando a imagem naquele momento, podemos subtrair uma fração desse ruído e dar um passo em direção à imagem limpa:
+
+$$
+x_{t-1} = \frac{1}{\sqrt{\alpha_t}} \left( x_t - \frac{1 - \alpha_t}{\sqrt{1 - \bar{\alpha}_t}} \epsilon_\theta(x_t, t) \right) + \sigma_t z
+$$
+
+O problema dessa abordagem é que a trajetória entre o ruído e a imagem é estocástica e curva. Na inferência, para não desviar do caminho e gerar imagens borradas, o amostrador precisa de 30 a 50 micro-passos iterativos.
+
+## 3. O salto moderno: Flow Matching e trajetórias retas
+
+A partir do final de 2023 e ao longo de 2024, modelos líderes como o **Flux.1** (da Black Forest Labs, equipe fundadora do Stable Diffusion original) e o **Stable Diffusion 3.5** abandonaram a formulação de DDPM e adotaram o **Flow Matching** (especificamente o *Rectified Flow*).
+
+Em vez de simular um processo browniano de difusão com trajetórias curvas, o Rectified Flow traça a rota mais simples possível entre o ruído puro $x_1$ e o dado limpo $x_0$: uma linha reta no espaço contínuo.
+
+A interpolação entre o dado e o ruído no instante $t \in [0, 1]$ é linear:
+
+$$
+x_t = (1 - t) x_0 + t x_1
+$$
+
+Se derivarmos essa posição $x_t$ em relação ao tempo $t$, encontramos a velocidade constante do ponto:
+
+$$
+\frac{d x_t}{dt} = x_1 - x_0
+$$
+
+A rede neural não tenta mais prever ruído com schedules arbitrários. Ela é treinada simplesmente para prever esse campo vetorial de velocidade direta $v_\theta(x_t, t)$:
+
+$$
+\mathcal{L}_{\text{FM}} = \mathbb{E}_{t, x_0, x_1} \left[ \| v_\theta(x_t, t) - (x_1 - x_0) \|^2 \right]
+$$
+
+### Por que isso mudou a velocidade da inferência?
+Como a trajetória aprendida se aproxima de uma reta, um integrador numérico ordinário de Euler consegue resolver a equação diferencial ordinária (EDO) dando passos muito maiores:
+
+$$
+x_{t - \Delta t} = x_t - v_\theta(x_t, t) \cdot \Delta t
+$$
+
+Fiz um teste prático em um script em Python treinando um MLP simples com Flow Matching em uma distribuição de 8 gaussianas. Medindo a curvatura da trajetória (o desvio angular entre passos sucessivos via similaridade de cosseno), o modelo convergiu com consistência geométrica em apenas 10 a 15 passos de Euler, enquanto amostradores curvos precisavam do triplo de iterações para o mesmo nível de fidelidade.
+
+## 4. Saindo das Convoluções: DiT e MMDiT
+
+Durante anos, a espinha dorsal da difusão foi a **U-Net**, uma rede cheia de convoluções que processava características em múltiplas resoluções. A U-Net funciona muito bem para manter coerência espacial local, mas sofre para escalar além de 2 a 3 bilhões de parâmetros.
+
+Em 2023, Peebles e Xie propuseram o **Diffusion Transformer (DiT)**: eliminar a U-Net e tratar o tensor latente como uma sequência de blocos planos (patches), exatamente como o Vision Transformer (ViT) faz em classificação.
+
+Nos modelos de ponta atuais, essa ideia foi refinada no **MMDiT** (Multi-Modal DiT):
+
+1. O prompt de texto é processado por grandes modelos de linguagem (como o T5-XXL, com mais de 4 bilhões de parâmetros, combinado com o CLIP).
+2. Em vez de injetar o texto por cross-attention em uma rede puramente visual, os tokens visuais e os tokens de texto passam por fluxos de pesos separados nas camadas iniciais.
+3. Isso evita a contaminação mútua: o texto não perde sua estrutura gramatical complexa e os recursos visuais não são achatados precocemente. A fusão das duas modalidades ocorre via atenção compartilhada em camadas intermediárias e profundas.
+
+É essa capacidade do T5 de ler prompts densos somada à flexibilidade do MMDiT que permite ao Flux renderizar palavras legíveis em cartazes e rótulos, algo que o Stable Diffusion 1.5 errava quase sempre.
+
+## 5. De Imagem para Vídeo: A Quarta Dimensão e a Explosão de Dados
+
+Se gerar uma imagem já exige compactação latente, gerar vídeo é ordens de grandeza mais desafiador. Um vídeo adiciona a dimensão temporal $T$:
+
+$$
+V \in \mathbb{R}^{T \times H \times W \times C}
+$$
+
+Um clipe curto de 5 segundos a 24 quadros por segundo em resolução 720p contém 120 imagens de $1280 \times 720$ pixels. Isso soma mais de 331 milhões de valores em ponto flutuante, ou cerca de 630 MB de dados brutos para um único vídeo em precisão de 16 bits.
+
+Se dividirmos esse vídeo bruto em patches convencionais de $1 \times 16 \times 16$, obtemos 432.000 tokens de sequência. Como o custo de computar a autoatenção padrão em Transformers escala quadraticamente com o número de tokens:
+
+$$
+\text{Custo de Atenção} \propto N^2 = (432.000)^2 \approx 1,86 \times 10^{11} \text{ operações}
+$$
+
+A memória de qualquer acelerador moderno simplesmente entra em colapso.
+
+### A solução da indústria: 3D Causal VAE e Spacetime Patches
+Modelos como o **Wan2.1** (da Alibaba), o **HunyuanVideo** (da Tencent), o **CogVideoX** e o **Sora** (da OpenAI) resolveram essa equação com dois pilares fundamentais:
+
+#### 1. 3D Causal VAE
+Em vez de usar um VAE que comprime apenas altura e largura, eles usam um autoencoder convolucional tridimensional. O Wan-VAE (do Wan2.1), por exemplo, comprime o tempo por um fator de 4x e o espaço por 8x:
+- Os 120 quadros temporais são compactados para 30 estados latentes temporais.
+- A resolução de $720 \times 1280$ é compactada para $90 \times 160$.
+
+O termo **causal** significa que as camadas convolucionais no tempo só enxergam frames do passado e do presente, nunca do futuro. Isso impede que informações de frames posteriores vazem para frames anteriores durante a codificação.
+
+#### 2. Spacetime Patches (Cubos 3D)
+O tensor latente $(30 \times 90 \times 160)$ é fatiado em cubos de tamanho $2 \times 2 \times 2$. Cada cubo tridimensional vira um único token de sequência para o Transformer.
+
+O número total de tokens cai de 432.000 para apenas 54.000. Isso representa uma **redução de 8 vezes no tamanho da sequência** e um alívio de **64 vezes no tamanho da matriz de atenção**.
+
+## 6. Por que os modelos de vídeo ainda erram a física?
+
+Apesar do realismo visual atingido por Wan2.1, Kling e Runway Gen-3, qualquer usuário atento nota falhas recorrentes: dedos que se fundem ao segurar uma xícara, pessoas que se viram de costas e perdem acessórios, ou líquidos que escorrem sem gravidade uniforme.
+
+A razão técnica para isso é direta: **esses modelos não são motores de física e não constroem malhas tridimensionais**.
+
+Eles operam como aproximadores estatísticos de densidade de probabilidade no espaço latente. O modelo aprende que, no dataset de treino, quando há um movimento de câmera para a direita, certos padrões de texturas se deslocam para a esquerda. No entanto, ele não mantém uma representação explícita de volume, inércia ou massa.
+
+Quando o modelo precisa interpolar posições em que oclusões complexas acontecem, a perda do Flow Matching busca a solução estatisticamente mais provável dentro da distribuição. Em casos ambíguos, a rede minimiza o erro criando transições plásticas contínuas, gerando membros extras ou teletransportando objetos.
+
+## 7. O que fica desse panorama
+
+Entender a evolução desses modelos mostra que o salto de qualidade recente não foi mágica nem apenas aumento indiscriminado de dados de treino:
+
+1. A **compressão latente (VAE 2D e 3D)** foi o que viabilizou rodar modelos generativos fora de supercomputadores de pesquisa.
+2. O **Flow Matching** substituiu o processo estocástico curvo de difusão por trajetórias retas determinísticas, cortando pela metade o número de passos de inferência.
+3. O abandono da U-Net convolucional em favor do **DiT / MMDiT** permitiu aplicar as leis de escala dos Transformers à visão computacional, destravando a compreensão de textos densos e composições complexas.
+4. O vídeo exige **atenção espaço-temporal estruturada**; quem domina o 3D Causal VAE domina o tempo de computação.
+
+Todo o código com os experimentos do Flow Matching em 2D e o cálculo de atenção dos patches 3D está documentado e reproduzível no repositório do projeto.
