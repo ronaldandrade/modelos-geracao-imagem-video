@@ -1,111 +1,187 @@
+"""Comparação didática em 2D: difusão (DDPM + amostrador DDIM) vs Flow Matching
+(Rectified Flow) vs Rectified Flow com uma rodada de reflow.
+
+Alvo: anel com 8 gaussianas (raio 2, desvio 0.08).
+
+Métricas:
+- retidão: comprimento do caminho / distância entre início e fim, medida numa
+  trajetória fina (200 passos). Uma reta perfeita vale 1.0.
+- precisão: fração de amostras a menos de 0.3 (cerca de 3.75 desvios) de algum centro.
+"""
+
 import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-class ToyVelocityMLP(nn.Module):
-    def __init__(self, hidden_dim=64):
+NUM_CENTERS = 8
+RADIUS = 2.0
+NOISE_STD = 0.08
+CENTERS = torch.stack(
+    [
+        RADIUS * torch.cos(torch.linspace(0, 2 * math.pi, NUM_CENTERS + 1)[:-1]),
+        RADIUS * torch.sin(torch.linspace(0, 2 * math.pi, NUM_CENTERS + 1)[:-1]),
+    ],
+    dim=-1,
+)
+
+
+class ToyMLP(nn.Module):
+    def __init__(self, hidden_dim=128):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(2 + 1, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, 2)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 2),
         )
 
     def forward(self, x, t):
         if t.dim() == 1:
             t = t.unsqueeze(-1)
-        inp = torch.cat([x, t], dim=-1)
-        return self.net(inp)
+        return self.net(torch.cat([x, t], dim=-1))
 
-def sample_target_ring(batch_size=512, num_centers=8, radius=2.0, noise_std=0.08):
-    angles = torch.linspace(0, 2 * math.pi, num_centers + 1)[:-1]
-    centers = torch.stack([radius * torch.cos(angles), radius * torch.sin(angles)], dim=-1)
-    indices = torch.randint(0, num_centers, (batch_size,))
-    sampled_centers = centers[indices]
-    noise = torch.randn(batch_size, 2) * noise_std
-    return sampled_centers + noise
 
-def train_rectified_flow(steps=600, lr=1e-3, batch_size=512):
-    torch.manual_seed(42)
-    model = ToyVelocityMLP(hidden_dim=64)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    
-    losses = []
-    for step in range(steps):
-        x0 = sample_target_ring(batch_size=batch_size)
-        x1 = torch.randn(batch_size, 2)
-        
+def sample_target_ring(batch_size=512):
+    idx = torch.randint(0, NUM_CENTERS, (batch_size,))
+    return CENTERS[idx] + torch.randn(batch_size, 2) * NOISE_STD
+
+
+def _train(loss_fn, steps, lr, seed):
+    torch.manual_seed(seed)
+    model = ToyMLP()
+    opt = optim.Adam(model.parameters(), lr=lr)
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, steps)
+    for _ in range(steps):
+        loss = loss_fn(model)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        sched.step()
+    return model, loss.item()
+
+
+# ---------------------------------------------------------------------------
+# Flow Matching / Rectified Flow: x_t = (1 - t) x0 + t x1, x1 ~ N(0, I), alvo v = x1 - x0
+# ---------------------------------------------------------------------------
+def train_rectified_flow(steps=4000, lr=2e-3, batch_size=512, pairs=None, seed=0):
+    def loss_fn(model):
+        if pairs is None:
+            x0 = sample_target_ring(batch_size)
+            x1 = torch.randn(batch_size, 2)
+        else:  # reflow: pares (ruído, dado) acoplados pela ODE do modelo anterior
+            idx = torch.randint(0, pairs[0].shape[0], (batch_size,))
+            x1, x0 = pairs[0][idx], pairs[1][idx]
         t = torch.rand(batch_size, 1)
         xt = (1.0 - t) * x0 + t * x1
-        target_velocity = x1 - x0
-        
-        pred_velocity = model(xt, t)
-        loss = torch.mean((pred_velocity - target_velocity) ** 2)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        losses.append(loss.item())
-        
-    return model, losses
+        return torch.mean((model(xt, t) - (x1 - x0)) ** 2)
 
-def sample_rectified_flow(model, num_samples=500, num_steps=10):
-    model.eval()
-    with torch.no_grad():
-        x = torch.randn(num_samples, 2)
-        dt = 1.0 / num_steps
-        trajectory = [x.clone()]
-        
-        for step in range(num_steps):
-            t_val = 1.0 - step * dt
-            t = torch.full((num_samples, 1), t_val)
-            v = model(x, t)
-            x = x - v * dt
-            trajectory.append(x.clone())
-            
-    return x, trajectory
+    return _train(loss_fn, steps, lr, seed)
 
-def calculate_trajectory_curvature(trajectory):
-    total_curvature = 0.0
-    num_steps = len(trajectory) - 1
-    if num_steps < 2:
-        return 0.0
-        
-    for i in range(1, num_steps):
-        v1 = trajectory[i] - trajectory[i - 1]
-        v2 = trajectory[i + 1] - trajectory[i]
-        cos_sim = torch.sum(v1 * v2, dim=-1) / (torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-7)
-        total_curvature += torch.mean(1.0 - cos_sim).item()
-        
-    return total_curvature / (num_steps - 1)
+
+@torch.no_grad()
+def sample_rectified_flow(model, x1, num_steps):
+    x, dt = x1.clone(), 1.0 / num_steps
+    traj = [x.clone()]
+    for i in range(num_steps):
+        t = torch.full((x.shape[0], 1), 1.0 - i * dt)
+        x = x - model(x, t) * dt  # Euler de t=1 (ruído) até t=0 (dado)
+        traj.append(x.clone())
+    return x, traj
+
+
+# ---------------------------------------------------------------------------
+# DDPM (predição de epsilon, schedule linear, T = 1000) com amostrador DDIM (eta = 0)
+# ---------------------------------------------------------------------------
+T_DDPM = 1000
+BETAS = torch.linspace(1e-4, 0.02, T_DDPM)
+ALPHA_BAR = torch.cumprod(1.0 - BETAS, dim=0)
+
+
+def train_ddpm(steps=4000, lr=2e-3, batch_size=512, seed=0):
+    def loss_fn(model):
+        x0 = sample_target_ring(batch_size)
+        t = torch.randint(0, T_DDPM, (batch_size,))
+        eps = torch.randn(batch_size, 2)
+        ab = ALPHA_BAR[t].unsqueeze(-1)
+        xt = ab.sqrt() * x0 + (1 - ab).sqrt() * eps
+        return torch.mean((model(xt, t.float() / T_DDPM) - eps) ** 2)
+
+    return _train(loss_fn, steps, lr, seed)
+
+
+@torch.no_grad()
+def sample_ddim(model, xT, num_steps):
+    ts = torch.linspace(T_DDPM - 1, 0, num_steps + 1).round().long()
+    x = xT.clone()
+    traj = [x.clone()]
+    for i in range(num_steps):
+        t, t_next = ts[i], ts[i + 1]
+        ab, ab_next = ALPHA_BAR[t], (ALPHA_BAR[t_next] if i < num_steps - 1 else torch.tensor(1.0))
+        eps = model(x, torch.full((x.shape[0],), t.item() / T_DDPM))
+        x0_hat = (x - (1 - ab).sqrt() * eps) / ab.sqrt()
+        x = ab_next.sqrt() * x0_hat + (1 - ab_next).sqrt() * eps
+        traj.append(x.clone())
+    return x, traj
+
+
+# ---------------------------------------------------------------------------
+# Métricas
+# ---------------------------------------------------------------------------
+def straightness(traj):
+    pts = torch.stack(traj)
+    length = (pts[1:] - pts[:-1]).norm(dim=-1).sum(0)
+    chord = (pts[-1] - pts[0]).norm(dim=-1)
+    return (length / (chord + 1e-8)).mean().item()
+
+
+def precision(samples, tol=0.3):
+    d = torch.cdist(samples, CENTERS).min(dim=-1).values
+    return (d < tol).float().mean().item()
+
 
 def run_experiment():
-    print("Treinando modelo Flow Matching (Rectified Flow) em distribuicao de 8 gaussianas...")
-    model, losses = train_rectified_flow(steps=800, lr=2e-3, batch_size=512)
-    print(f"Treino concluido. Loss final: {losses[-1]:.5f}")
-    
-    print("\nAvaliando geracao com diferentes passos de integracao de Euler:")
-    steps_list = [5, 10, 20, 50]
-    results = {}
-    for steps in steps_list:
-        samples, trajectory = sample_rectified_flow(model, num_samples=1000, num_steps=steps)
-        curvature = calculate_trajectory_curvature(trajectory)
-        radius_mean = torch.mean(torch.norm(samples, dim=-1)).item()
-        radius_std = torch.std(torch.norm(samples, dim=-1)).item()
-        results[steps] = {
-            "curvature": curvature,
-            "mean_radius": radius_mean,
-            "std_radius": radius_std
-        }
-        print(f"Passos: {steps:2d} | Curvatura media: {curvature:.6f} | Raio medio: {radius_mean:.3f} (alvo: 2.000, std: {radius_std:.3f})")
+    n_eval = 2000
+    torch.manual_seed(123)
+    noise = torch.randn(n_eval, 2)
 
-    print("\nConclusao do teste:")
-    print("O Flow Matching preserva raio e distribuicao geometrica mesmo com apenas 10 passos,")
-    print("porque a trajetoria aprendida eh essencialmente uma reta (curvatura proxima de zero).")
+    print("Treinando DDPM (predicao de ruido)...")
+    ddpm, l_ddpm = train_ddpm()
+    print(f"  loss final: {l_ddpm:.4f}")
+    print("Treinando Rectified Flow (Flow Matching)...")
+    rf, l_rf = train_rectified_flow()
+    print(f"  loss final: {l_rf:.4f}  (perda alta e esperada: o alvo x1 - x0 tem variancia irredutivel)")
+    print("Gerando pares acoplados pela ODE e treinando 1 rodada de reflow...")
+    z = torch.randn(20000, 2)
+    x_coupled, _ = sample_rectified_flow(rf, z, 200)
+    reflow, l_re = train_rectified_flow(pairs=(z, x_coupled), seed=1)
+    print(f"  loss final: {l_re:.4f}")
+
+    samplers = {
+        "DDPM + DDIM": lambda n: sample_ddim(ddpm, noise, n),
+        "Rectified Flow": lambda n: sample_rectified_flow(rf, noise, n),
+        "Rectified Flow + reflow": lambda n: sample_rectified_flow(reflow, noise, n),
+    }
+
+    print("\nRetidao da trajetoria (comprimento / corda, 200 passos; reta = 1.000):")
+    for name, fn in samplers.items():
+        _, traj = fn(200)
+        print(f"  {name:<24s} {straightness(traj):.3f}")
+
+    steps_list = [1, 2, 5, 10, 20, 50]
+    print("\nPrecisao (fracao de amostras a < 0.3 de um centro) por numero de passos:")
+    print("  " + " " * 24 + "".join(f"{s:>8d}" for s in steps_list))
+    for name, fn in samplers.items():
+        row = "".join(f"{precision(fn(s)[0]):8.3f}" for s in steps_list)
+        print(f"  {name:<24s}{row}")
+
+    print("\nLeitura: so os caminhos CONDICIONAIS do Flow Matching sao retos. O campo")
+    print("marginal aprendido e curvo quando o alvo tem varios modos; o reflow")
+    print("re-acopla ruido e dado e deixa a trajetoria mais reta, o que permite menos passos.")
+
 
 if __name__ == "__main__":
     run_experiment()

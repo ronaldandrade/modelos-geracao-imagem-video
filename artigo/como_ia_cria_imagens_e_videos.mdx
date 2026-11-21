@@ -4,6 +4,7 @@ date: "2026-11-20"
 description: "Uma dissecação matemática e prática de como funcionam os modelos modernos de síntese visual: por que saímos de GANs para difusão, o salto linear do Flow Matching no Flux e SD3, e como Wan2.1 e Sora usam 3D Causal VAEs para vídeo."
 tags: ["Visão Computacional", "Deep Learning", "Difusão", "Flow Matching", "Vídeo Generativo"]
 author: "Ronald Andrade"
+cover: "./imagens/flux_flow_matching_mmdit.jpg"
 readingTime: "14 min"
 difficulty: "intermediate"
 ---
@@ -102,6 +103,8 @@ Nos modelos de ponta atuais, essa ideia foi refinada no **MMDiT** (Multi-Modal D
 
 É essa capacidade do T5 de ler prompts densos somada à flexibilidade do MMDiT que permite ao Flux renderizar palavras legíveis em cartazes e rótulos, algo que o Stable Diffusion 1.5 errava quase sempre.
 
+![Ilustração conceitual da geração de imagens por Flow Matching e MMDiT em modelos como Flux.1 e Stable Diffusion 3.5: da esquerda para a direita, ruído gaussiano puro se organiza ao longo de vetores retos e paralelos em ciano e âmbar até formar uma cena noturna chuvosa fotorrealista de uma cafeteria de esquina com o letreiro em neon "FLUX" perfeitamente legível na vitrine.](./imagens/flux_flow_matching_mmdit.jpg)
+
 ## 5. De Imagem para Vídeo: A Quarta Dimensão e a Explosão de Dados
 
 Se gerar uma imagem já exige compactação latente, gerar vídeo é ordens de grandeza mais desafiador. Um vídeo adiciona a dimensão temporal $T$:
@@ -135,6 +138,8 @@ O tensor latente $(30 \times 90 \times 160)$ é fatiado em cubos de tamanho $2 \
 
 O número total de tokens cai de 432.000 para apenas 54.000. Isso representa uma **redução de 8 vezes no tamanho da sequência** e um alívio de **64 vezes no tamanho da matriz de atenção**.
 
+![Visualização tridimensional do pipeline de vídeo com 3D Causal VAE e Spacetime Patches usado por modelos como Sora, Wan2.1 e HunyuanVideo: cinco quadros translúcidos de uma onda oceânica em sequência são comprimidos em um cubo latente 3D subdividido em pequenos blocos volumétricos translúcidos (voxels em ciano, azul e âmbar) que se destacam em fila formando a sequência de tokens para o Transformer.](./imagens/spacetime_patches_video_3d.jpg)
+
 ## 6. Modelos de vitrine: o que roda por trás de nomes como Seedance e Nano Banana?
 
 Nas redes sociais e comunidades de criadores, nomes como **Seedance** e **Nano Banana** aparecem com frequência associados a vídeos hiper-realistas. Vale separar o que é arquitetura fundacional e o que é engenharia de produto.
@@ -148,6 +153,8 @@ Modelos comuns geram um vídeo mudo e dependem de ferramentas externas para dubl
 
 Como as atenções das duas ramificações se cruzam durante o processo de amostragem, o modelo aprende a sincronizar movimentos labiais com os fonemas e a disparar sons ambientes (como passos ou portas batendo) exatamente no frame em que o impacto visual acontece. Além disso, o Seedance se apoia fortemente no paradigma **Reference-to-Video (R2V)**: o usuário pode alimentar um vídeo curto de referência com um movimento de câmera ou coreografia corporal, e o modelo transfere essa trajetória física para um novo personagem sem deformar a sua identidade.
 
+![Ilustração conceitual da arquitetura Dual-branch DiT e do modo Reference-to-Video (R2V) do ByteDance Seedance: à esquerda, uma silhueta wireframe ciano de uma bailarina em salto transfere sua trajetória de movimento para uma bailarina fotorrealista ao centro, envolvida simultaneamente por uma fita translúcida de quadros de vídeo e por uma forma de onda sonora dourada sincronizada com ondas concêntricas no chão.](./imagens/seedance_dual_branch_audiovisual.jpg)
+
 ### Nano Banana: estúdios orquestradores e a ilusão do modelo único
 Por outro lado, iniciativas como o ecossistema **Nano Banana** (e estúdios semelhantes como CyberBanana) ilustram outro lado da indústria: a camada de produto.
 
@@ -157,6 +164,8 @@ Em vez de ser uma arquitetura matemática treinada do zero em dezenas de milhõe
 3. **Pipelines de consistência de identidade:** a sensação de que o modelo "nunca erra o rosto" não vem de um único prompt milagroso, mas sim de uma esteira de engenharia que combina encoders de características faciais (como IP-Adapter), máscaras automáticas de segmentação para inpainting e interpolação forçada entre primeiro e último quadro (*first & last frame control*).
 
 Entender essa divisão entre quem treina o backbone (o DiT massivo) e quem constrói o pipeline de amarração de identidade ajuda a enxergar onde está a inovação matemática e onde está a pura engenharia de software.
+
+![Tríptico editorial representando o pipeline de orquestração multimodal de estúdios como o Nano Banana: três quadros cinematográficos ligados por curvas douradas e uma linha do tempo inferior mantêm exatamente a mesma personagem de jaqueta amarelo-dourada em cenários distintos, com o quadro central destacando uma malha geométrica de pontos faciais e contorno luminoso de máscara de segmentação entre o primeiro e o último quadro.](./imagens/nano_banana_orquestracao_multimodal.jpg)
 
 ## 7. Por que os modelos de vídeo ainda erram a física?
 
