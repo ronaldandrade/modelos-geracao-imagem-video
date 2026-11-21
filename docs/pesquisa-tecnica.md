@@ -1,6 +1,6 @@
 # Pesquisa Técnica: A Engenharia por Trás da Geração de Imagem e Vídeo por IA
 
-Este documento reúne a fundamentação matemática, decisões arquiteturais e comparativo das principais famílias de modelos generativos visuais do estado da arte (foco em 2023–2026).
+Este documento reúne a fundamentação matemática, decisões arquiteturais e comparativo das principais famílias de modelos generativos visuais do estado da arte (foco em 2023–2026). Revisado em 20/11/2026.
 
 ---
 
@@ -8,15 +8,15 @@ Este documento reúne a fundamentação matemática, decisões arquiteturais e c
 
 ### 1.1 Do Pixel ao Latente: GANs vs VAEs vs Difusão
 
-Historicamente, a síntese de imagem operou sob quatro grandes paradigmas:
+Historicamente, a síntese de imagem passou pelos seguintes paradigmas:
 
 | Paradigma | Mecanismo Central | Vantagens | Principais Gargalos | Modelos Clássicos |
 |---|---|---|---|---|
-| **GANs** (2014–2021) | Jogo Minimax entre Gerador $G$ e Discriminador $D$ | Amostragem em 1 passo, imagens nítidas | Colapso de modo (*mode collapse*), instabilidade extrema no treino, difícil cobertura de distribuição | DCGAN, StyleGAN2/3, BigGAN |
-| **VAEs / VQ-GAN** (2013–2021) | Compressão em espaço latente contínuo ou discretizado com codebook | Treino estável por máxima verossimilhança (ELBO) | Imagens borradas (regressão à média em VAE simples); VQ-GAN requer quantização vetorial pesada | VAE, VQ-VAE-2, VQGAN |
-| **Modelos Autorregressivos** (2020–hoje) | Previsão sequencial do próximo token visual (raster scan) via Transformers | Escala excelente com parâmetros e dados | Custo computacional quadrático no número de tokens; geração sequencial lenta | Parti, DALL-E 1, LlamaGen, Muse |
-| **Modelos de Difusão (DDPM / LDM)** (2020–hoje) | Destruição progressiva por ruído gaussiano e reconstrução reversa aprendida | Cobertura fantástica da distribuição, estabilidade de treino | Dezenas de passos de amostragem iterativa; trajetórias estocásticas curvas | DDPM, DDIM, Stable Diffusion 1.5/XL |
-| **Flow Matching / Rectified Flow** (2022–hoje) | Interpolação linear direta (trajetória reta) no espaço de probabilidades via ODEs | Amostragem em poucos passos (10–28), dinâmica determinística rápida | Requer arquiteturas com grande capacidade (DiT) para estimar o campo de velocidade | Flux.1, SD3 / SD3.5, Wan2.1 |
+| **GANs** (2014–2021) | Jogo Minimax entre Gerador $G$ e Discriminador $D$ | Amostragem em 1 passo, imagens nítidas | Colapso de modo (*mode collapse*), instabilidade no treino, difícil cobertura de distribuição | DCGAN, StyleGAN2/3, BigGAN |
+| **VAEs / VQ-GAN** (2013–2021) | Compressão em espaço latente contínuo ou discretizado com codebook | Treino estável por máxima verossimilhança (ELBO) | Imagens borradas (regressão à média em VAE simples); VQ-GAN requer quantização vetorial | VAE, VQ-VAE-2, VQGAN |
+| **Transformers sobre tokens visuais** (2020–hoje) | Autorregressivos: próximo token visual em ordem raster. Mascarados: vários tokens em paralelo | Escala bem com parâmetros e dados | Custo quadrático no número de tokens; geração autorregressiva sequencial lenta | Autorregressivos: DALL-E 1, Parti, LlamaGen. Mascarados: MaskGIT, Muse |
+| **Modelos de Difusão (DDPM / LDM)** (2020–hoje) | Destruição progressiva por ruído gaussiano e reconstrução reversa aprendida | Ótima cobertura da distribuição, estabilidade de treino | Dezenas de passos de amostragem (1000 no DDPM original; 20–50 com DDIM/DPM-Solver) | DDPM, DDIM, Stable Diffusion 1.5/XL |
+| **Flow Matching / Rectified Flow** (2022–hoje) | Regressão de um campo de velocidade ao longo de caminhos condicionais retos entre ruído e dado; amostragem por ODE | Alvo de treino simples; boa qualidade com menos passos (tipicamente 28–50 sem destilação, 1–4 com destilação) | Campo marginal ainda curvo; requer backbones grandes (DiT) | SD3 / SD3.5, Flux.1, Wan2.1, HunyuanVideo |
 
 ---
 
@@ -40,62 +40,73 @@ $$
 onde $\alpha_t = 1 - \beta_t$ e $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$.
 
 #### Processo Reverso (*Reverse Process*)
-A rede neural $\epsilon_\theta(x_t, t)$ é treinada para prever exatamente o ruído $\epsilon$ adicionado no instante $t$:
+A rede neural $\epsilon_\theta(x_t, t)$ é treinada para prever o ruído $\epsilon$ adicionado no instante $t$:
 
 $$
 \mathcal{L}_{\text{simple}}(\theta) = \mathbb{E}_{t, x_0, \epsilon} \left[ \| \epsilon - \epsilon_\theta(x_t, t) \|^2 \right]
 $$
 
-Na inferência, partindo de ruído puro $x_T \sim \mathcal{N}(0, \mathbf{I})$, remove-se iterativamente o ruído estimado ao longo de dezenas de passos:
+Na inferência, partindo de ruído puro $x_T \sim \mathcal{N}(0, \mathbf{I})$, remove-se iterativamente o ruído estimado:
 
 $$
 x_{t-1} = \frac{1}{\sqrt{\alpha_t}} \left( x_t - \frac{\beta_t}{\sqrt{1 - \bar{\alpha}_t}} \epsilon_\theta(x_t, t) \right) + \sigma_t z
 $$
 
+O DDPM original percorre os $T = 1000$ passos. O DDIM (Song et al., 2020) reformula a amostragem como uma ODE determinística e reduz para 20–50 passos sem retreinar a rede.
+
 #### Por que o LDM (*Latent Diffusion Models*) mudou tudo?
-Operar difusão diretamente em pixels de alta resolução ($512 \times 512 \times 3 = 786.432$ valores) exige memória e processamento inviáveis em GPUs domésticas. O LDM (Rombach et al., 2022 / Stable Diffusion) resolveu isso comprimindo a imagem através de um VAE pré-treinado com fator de escala $f=8$:
+Difusão em pixels funciona (o DDPM original já gerava 256×256 em LSUN e CelebA-HQ; o ADM chegou a 512×512), mas o custo de treino e inferência cresce rápido com a resolução, porque a rede inteira roda dezenas de vezes por amostra sobre $512 \times 512 \times 3 = 786.432$ valores. O LDM (Rombach et al., 2022 / Stable Diffusion) resolveu isso comprimindo a imagem através de um VAE pré-treinado com fator de escala $f=8$:
 
 $$
 x \in \mathbb{R}^{3 \times 512 \times 512} \xrightarrow{\mathcal{E}} z \in \mathbb{R}^{4 \times 64 \times 64}
 $$
 
-A difusão roda no tensor latente $z$, que tem apenas 16.384 valores — uma redução de **48 vezes** no volume de dados processados pela rede a cada passo.
+A difusão roda no tensor latente $z$, que tem apenas 16.384 valores: uma redução de **48 vezes** no volume de dados processados pela rede a cada passo.
 
 ---
 
 ### 1.3 O Novo Paradigma: Flow Matching e Rectified Flow
 
-Embora o LDM tenha democratizado a difusão, os amostradores estocásticos (como SDEs) geram trajetórias curvas e erráticas no espaço latente. Para contornar esse problema, surgiu o **Flow Matching** (Lipman et al., 2022) e o **Rectified Flow** (Liu et al., 2022):
+Em paralelo, surgiram o **Flow Matching** (Lipman et al., 2022) e o **Rectified Flow** (Liu et al., 2022):
 
-#### A Trajetória Retilínea
-Em vez de difusão browniana, define-se uma interpolação linear direta entre a distribuição de ruído $x_1 \sim \mathcal{N}(0, \mathbf{I})$ e os dados limpos $x_0 \sim p_{\text{data}}$:
+#### A Trajetória Retilínea (condicional)
+Para cada par (ruído $x_1 \sim \mathcal{N}(0, \mathbf{I})$, dado $x_0 \sim p_{\text{data}}$), define-se uma interpolação linear:
 
 $$
 x_t = (1 - t) x_0 + t x_1, \quad t \in [0, 1]
 $$
 
-A derivada temporal dessa trajetória é simplesmente a velocidade constante:
+A derivada temporal dessa trajetória é a velocidade constante:
 
 $$
 \frac{d x_t}{dt} = x_1 - x_0
 $$
 
-A rede neural $v_\theta(x_t, t)$ é treinada para prever esse campo de velocidade vetorial direto:
+A rede neural $v_\theta(x_t, t)$ é treinada para regredir essa velocidade:
 
 $$
 \mathcal{L}_{\text{FM}}(\theta) = \mathbb{E}_{t, x_0, x_1} \left[ \| v_\theta(x_t, t) - (x_1 - x_0) \|^2 \right]
 $$
 
-#### Por que isso é superior?
-1. **Trajetórias retas (*straight paths*):** O caminho entre o ruído e a imagem é uma linha reta. Integradores de EDOs (como Euler simples ou Heun) conseguem percorrer a trajetória em apenas 10 a 28 passos sem acumular desvios que estragam o resultado.
-2. **Estabilidade de treino:** Sem schedules de ruído complexos ($\beta_t$ cosine ou linear).
-3. **Adoção nos modelos líderes:** É a base matemática do **Flux.1** (Black Forest Labs), do **Stable Diffusion 3/3.5** e do **Wan2.1**.
+#### O que isso garante e o que não garante
+1. **Só os caminhos condicionais são retos.** O ótimo da perda é $v^*(x, t) = \mathbb{E}[x_1 - x_0 \mid x_t = x]$, a média das velocidades de todos os pares que passam por $x$. Esse campo marginal é curvo quando $p_{\text{data}}$ tem vários modos, e a perda tem um piso irredutível maior que zero.
+2. **Reflow endireita as trajetórias.** O Rectified Flow original propõe retreinar sobre pares (ruído, amostra) gerados pelo próprio modelo; as trajetórias ficam quase retas e a amostragem em 1–2 passos se torna viável.
+3. **Na prática:** o alvo de velocidade é simples e dispensa schedules de ruído elaborados, e a qualidade com poucos passos tende a ser melhor que a da difusão com DDIM. O SD3 (Esser et al., 2024) mostrou que o Rectified Flow com amostragem de $t$ concentrada nos tempos intermediários (*logit-normal*) supera as formulações de difusão em escala. Amostragem em 1–4 passos em produção (Flux.1 Schnell, SD3.5 Turbo) vem de destilação.
+4. **Adoção:** SD3/SD3.5, Flux.1, Wan2.1 e HunyuanVideo.
+
+O experimento em `src/toy_diffusion_vs_flow.py` (8 gaussianas em 2D) mostra isso. A retidão é o comprimento do caminho dividido pela corda (reta = 1,0), e a precisão é a fração de amostras a menos de 0,3 de um centro:
+
+| Modelo | Retidão | Precisão, 1 passo | 5 passos | 10 passos | 50 passos |
+|---|---|---|---|---|---|
+| DDPM + DDIM | 1,63 | 0,01 | 0,47 | 0,73 | 0,85 |
+| Rectified Flow | 1,74 | 0,00 | 0,74 | 0,89 | 0,95 |
+| Rectified Flow + 1 reflow | 1,00 | 0,78 | 0,88 | 0,91 | 0,93 |
 
 ---
 
 ### 1.4 A Mudança Arquitetural: U-Net vs DiT vs MMDiT
 
-Durante anos, a U-Net convolucional foi a espinha dorsal de qualquer modelo de difusão. A partir de 2023 (Peebles & Xie, *Diffusion Transformers*), a indústria migrou para Transformers:
+Durante anos, a U-Net convolucional foi a espinha dorsal dos modelos de difusão. Com o DiT (Peebles & Xie, arXiv dez/2022, ICCV 2023), a indústria migrou para Transformers:
 
 ```
 [Latente 2D / 3D] ──> [Patchify (Linear Projection)] ──> [Tokens Visuais]
@@ -107,17 +118,18 @@ Durante anos, a U-Net convolucional foi a espinha dorsal de qualquer modelo de d
              ┌───────────────────────────┐
              │   MMDiT / DiT Blocks      │
              │  • RoPE (Positional)      │
-             │  • Self/Cross Attention   │
+             │  • Self/Joint Attention   │
              │  • AdaLN-Zero Modulation  │
              └───────────────────────────┘
                            │
                            ▼
-                    [Campo de Velocidade / Ruído Predito]
+           [Velocidade / Ruído / v predito]
 ```
 
-- **U-Net:** Limitada por induções convolucionais locais; difícil de escalar parâmetros além de 2 a 3 bilhões sem instabilidades.
-- **DiT (*Diffusion Transformer*):** Transforma latentes em uma sequência de patches (análogo ao ViT), processados por blocos padrão de Transformer. Segue as leis de escala (*scaling laws*) empíricas com previsibilidade.
-- **MMDiT (*Multi-Modal DiT* - SD3 e Flux.1):** Resolve o problema da interferência mútua. Em vez de forçar tokens de texto e imagem pelos mesmos pesos desde a primeira camada, o MMDiT mantém dois fluxos independentes de transformações lineares que trocam informação apenas nas operações de atenção, preservando os detalhes visuais e a obediência semântica ao texto.
+- **U-Net:** viés indutivo convolucional local. As maiores ficaram na faixa de 2–3B parâmetros (a do SDXL tem 2,6B), sem uma lei de escala clara.
+- **DiT (*Diffusion Transformer*):** transforma latentes em uma sequência de patches (análogo ao ViT), processados por blocos de Transformer com condicionamento por AdaLN-Zero. A qualidade (FID) melhora de forma previsível com mais GFLOPs.
+- **MMDiT (*Multi-Modal DiT*, SD3):** texto e imagem têm pesos separados (projeções e MLPs) em **todos** os blocos e trocam informação apenas na atenção conjunta, em que as duas sequências são concatenadas.
+- **Flux.1:** híbrido, com 19 blocos de fluxo duplo (estilo MMDiT) seguidos de 38 blocos de fluxo único, com pesos compartilhados. O HunyuanVideo usa o mesmo padrão dual → single stream.
 
 ---
 
@@ -127,84 +139,91 @@ Durante anos, a U-Net convolucional foi a espinha dorsal de qualquer modelo de d
 
 Um vídeo é um tensor $V \in \mathbb{R}^{T \times H \times W \times C}$. Adicionar a dimensão temporal $T$ traz três desafios críticos:
 
-1. **Explosão de Contexto:** Um clipe de 5 segundos a 24 fps tem $T = 120$ frames. Em resolução $720\text{p}$ ($1280 \times 720$), são mais de 330 milhões de valores em ponto flutuante por amostra bruta.
-2. **Atenção Quadrática:** Em Transformers, a complexidade da atenção padrão escala com $\mathcal{O}((T \cdot H \cdot W)^2)$.
-3. **Consistência Causal e Física:** A IA não possui um motor de física nem uma representação 3D do mundo; ela é um aproximador estatístico de correlações espaço-temporais. Isso gera os problemas típicos: membros fantasmas, deformações durante rotações de câmera e dinâmica de fluidos fisicamente impossível.
+1. **Explosão de contexto:** um clipe de cerca de 5 segundos a 24 fps tem 121 frames ($4n+1$, ver 2.2). Em 720p ($1280 \times 720$), são cerca de 335 milhões de valores por amostra bruta.
+2. **Atenção quadrática:** em Transformers, a atenção completa escala com $\mathcal{O}(N^2 d)$, com $N \propto T \cdot H \cdot W$.
+3. **Consistência causal e física:** o modelo não possui um motor de física nem uma representação 3D explícita do mundo; ele é um aproximador estatístico de correlações espaço-temporais. Isso gera os problemas típicos: membros fantasmas, deformações durante rotações de câmera e dinâmica de fluidos fisicamente impossível.
 
 ---
 
 ### 2.2 O Componente Crucial: 3D Causal VAE
 
-Para tornar a difusão de vídeo computacionalmente viável, todos os modelos modernos utilizam um **3D Causal Variational Autoencoder**:
+A maioria dos modelos de vídeo abertos recentes (Wan2.1, HunyuanVideo, CogVideoX) usa um **3D Causal Variational Autoencoder**:
 
 ```
-Vídeo Bruto (T x H x W x 3)
+Vídeo Bruto (T x H x W x 3), T = 4n + 1
          │
          ▼ [3D Causal VAE Encoder]
-         │ Comprime tempo (ex: 4x) e espaço (ex: 8x)
+         │ 1º quadro sozinho; demais em grupos de 4 (tempo) e 8x (espaço)
          ▼
-Latente de Vídeo ( (T/4) x (H/8) x (W/8) x C_latent )
+Latente de Vídeo ( (1 + (T-1)/4) x (H/8) x (W/8) x 16 )
 ```
 
-- **Compressão Espaço-Temporal:** Reduz a dimensão temporal (geralmente por fator 4 ou 8) e a espacial (fator 8). Um vídeo de 120 quadros $720 \times 1280$ vira um tensor latente de apenas $30 \times 90 \times 160 \times 16$.
-- **Por que Causal?** As convoluções e atenções temporais no encoder/decoder só podem olhar para quadros passados e presentes, nunca para quadros futuros. Isso impede o vazamento de informação temporal e viabiliza geração progressiva ou streaming sem distorções no histórico.
+- **Compressão espaço-temporal:** fator 4 no tempo e 8 no espaço (Wan-VAE e o VAE do HunyuanVideo, ambos com 16 canais). Um vídeo de 121 quadros $720 \times 1280$ vira um latente de $31 \times 90 \times 160 \times 16$.
+- **Por que causal?** As convoluções temporais só olham para quadros passados e presentes. Com isso, o primeiro quadro é codificado como uma imagem comum, e imagens e vídeos compartilham o mesmo espaço latente. Isso permite treino conjunto imagem + vídeo, image-to-video e codificação de vídeos longos em blocos com cache de features.
 
 ---
 
-### 2.3 Patches Espaço-Temporais 3D (*Spacetime Patches*)
+### 2.3 Patches Espaço-Temporais (*Spacetime Patches*)
 
-Popularizados pelo Sora e adotados no Wan2.1, HunyuanVideo e CogVideoX:
+Popularizados pelo relatório do Sora (que não publicou detalhes da arquitetura) e usados em Wan2.1, HunyuanVideo e CogVideoX:
 
-O tensor latente $(T' \times H' \times W')$ é fatiado em cubos tridimensionais de tamanho $p_t \times p_h \times p_w$ (tipicamente $2 \times 2 \times 2$). Cada cubo é projetado linearmente para um vetor de dimensão $D$, tornando-se um token único da sequência do Transformer.
-
-Número de tokens resultantes:
+O tensor latente $(T' \times H' \times W')$ é fatiado em blocos de tamanho $p_t \times p_h \times p_w$, e cada bloco é projetado linearmente para um vetor de dimensão $D$:
 
 $$
-N_{\text{tokens}} = \left(\frac{T'}{p_t}\right) \times \left(\frac{H'}{p_h}\right) \times \left(\frac{W'}{p_w}\right)
+N_{\text{tokens}} = \left\lceil\frac{T'}{p_t}\right\rceil \times \frac{H'}{p_h} \times \frac{W'}{p_w}
 $$
+
+- **Wan2.1 e HunyuanVideo:** $p = (1, 2, 2)$, sem agrupamento temporal no patch. Para o latente acima, são $31 \times 45 \times 80 = 111.600$ tokens.
+- **Patch temporal 2 (ex.: CogVideoX 1.5):** $p = (2, 2, 2)$ resulta em $16 \times 45 \times 80 = 57.600$ tokens.
+- **Comparação com pixels em patches $1 \times 16 \times 16$** (435.600 tokens): a sequência fica 3,9× menor com (1,2,2) e 7,6× menor com (2,2,2); a matriz de atenção fica 15× e 57× menor, respectivamente. Ver `src/spacetime_patching.py`.
 
 ---
 
 ## 3. Raio-X dos Principais Modelos de Imagem e Vídeo
 
-| Modelo | Criador | Tipo | Backbone | Objetivo / Amostrador | Encoders de Texto | Inovações Notáveis |
+"N/D" = não divulgado pelo fabricante. Versões atualizadas até novembro de 2026.
+
+| Modelo | Criador | Tipo | Backbone | Objetivo / Amostrador | Encoders de Texto | Notas |
 |---|---|---|---|---|---|---|
-| **Flux.1** (Schnell / Dev / Pro) | Black Forest Labs | Imagem | MMDiT (12B parâmetros) | Rectified Flow Matching (4 a 28 passos) | T5-XXL + CLIP ViT-L | Fluxos multimodais duplos, qualidade fotográfica extrema e renderização tipográfica precisa |
-| **Stable Diffusion 3.5** | Stability AI | Imagem | MMDiT (2B e 8B) | Flow Matching | CLIP ViT-L, OpenCLIP bigG, T5-XXL | Blocos duplos com atenção compartilhada e alta fidelidade ao prompt |
-| **Midjourney (v6 / v7)** | Midjourney | Imagem | Proprietário (DiT híbrido) | Difusão proprietária | LLM proprietária / recaptioning interno | Coerência estética superior, composição cinematográfica apurada |
-| **DALL-E 3** | OpenAI | Imagem | U-Net / DiT latente | Difusão guiada | GPT-4V (recaptioner) + T5/CLIP | Recaptioning denso: prompts do usuário são reescritos por LLM para guiar a síntese |
-| **Wan2.1** | Alibaba Tongyi Lab | Vídeo | Spatiotemporal DiT (1.3B e 14B) | Flow Matching | T5 Encoder | 3D Causal VAE (Wan-VAE), versão 1.3B roda em GPUs de 24 GB (RTX 4090), suporte I2V/T2V nativo |
-| **HunyuanVideo** | Tencent | Vídeo | Dual-stream to Single-stream DiT (13B) | Flow Matching | MLLM (multimodal) + CLIP | Separação estrita de texto e vídeo nas camadas iniciais e fusão posterior; pesos abertos |
-| **CogVideoX** | THUDM / Zhipu AI | Vídeo | Expert Transformer DiT (2B e 5B) | 3D VAE + Flow/Diffusion | T5-XXL | Atenção conjunta com blocos especialistas para texto e vídeo; 3D VAE causal eficiente |
-| **Sora** | OpenAI | Vídeo | Spacetime DiT em escala massiva | Difusão latente em patches 3D | GPT-recaptioner + MLLM | Pioneiro na formulação de patches 3D latentes em resolução flexível de aspecto e duração |
-| **Kling 1.5 / 2.0** | Kuaishou | Vídeo | 3D DiT proprietário | Flow Matching proprietário | MLLM multilíngue | Duração de até 2 a 3 minutos, simulação superior de movimentos humanos e mecânicos |
-| **Runway Gen-3 Alpha** | Runway | Vídeo | Spatiotemporal DiT | Difusão latente | Text Encoder + Motion Controllers | Alta fidelidade em controle cinematográfico de câmera e consistência de iluminação |
-| **ByteDance Seedance (1.0 / 2.0 / 2.5)** | ByteDance | Vídeo + Áudio | Dual-branch DiT | Flow Matching / Difusão | MLLM Doubao / Seed | Geração audiovisual sincronizada nativa (vídeo + efeitos sonoros/foley + lip-sync em pipeline unificado); forte suporte a vídeo de referência (R2V) |
-| **Google Veo (Veo 2 / 3)** | Google DeepMind | Vídeo | Spatiotemporal DiT | Latent Diffusion | Gemini multimodal text encoder | Compreensão cinemática densa de comandos de lente, enquadramento e física de fluidos |
+| **Flux.1** (Schnell / Dev / Pro) | Black Forest Labs | Imagem | DiT híbrido: 19 blocos duplos + 38 simples (12B) | Rectified Flow; Dev ~28–50 passos; Schnell 1–4 passos (destilação adversarial) | T5-XXL + CLIP ViT-L | Renderização tipográfica precisa; Dev é destilado de guidance |
+| **Stable Diffusion 3.5** | Stability AI | Imagem | MMDiT (Large 8B) / MMDiT-X (Medium 2.5B) | Rectified Flow | CLIP ViT-L, OpenCLIP bigG, T5-XXL | Atenção conjunta em todos os blocos; QK-normalization |
+| **Midjourney (v6 / v7)** | Midjourney | Imagem | N/D | N/D | N/D | Forte em estética e composição |
+| **Nano Banana / Pro / 2** | Google DeepMind | Imagem (geração e edição) | N/D (capacidade nativa de modelos Gemini) | N/D | Próprio Gemini | Gemini 2.5 Flash Image (ago/2025), Pro (nov/2025), Nano Banana 2 = Gemini 3.1 Flash Image (fev/2026); edição conversacional; marca d'água SynthID |
+| **DALL-E 3** | OpenAI | Imagem | Difusão latente (U-Net) | Difusão | T5-XXL | Recaptioning com um captioner próprio treinado pela OpenAI; no ChatGPT, o GPT-4 reescreve o prompt. Substituído pela geração nativa do GPT-4o / gpt-image |
+| **Wan2.1** | Alibaba Tongyi Lab | Vídeo | DiT espaço-temporal (1.3B e 14B), patch (1,2,2) | Flow Matching | umT5 (multilíngue) | Wan-VAE causal 4×8×8, 16 canais; 1.3B roda com ~8,2 GB de VRAM; T2V/I2V. Sucessores: Wan 2.2 (MoE) e 2.5 (com áudio) |
+| **HunyuanVideo** | Tencent | Vídeo | DiT dual-stream → single-stream (13B), patch (1,2,2) | Flow Matching | MLLM + CLIP | VAE causal 4×8×8; pesos abertos. Sucessor: HunyuanVideo 1.5 |
+| **CogVideoX** | Zhipu AI / THUDM | Vídeo | Expert Transformer (2B e 5B), expert adaptive LayerNorm | Difusão com v-prediction e zero-SNR | T5-XXL | Atenção 3D completa; VAE 3D causal |
+| **Sora / Sora 2** | OpenAI | Vídeo (+ áudio no Sora 2) | DiT sobre patches espaço-temporais (detalhes N/D) | Difusão latente (detalhes N/D) | N/D (recaptioning estilo DALL-E 3) | Popularizou os patches espaço-temporais; Sora 2 (set/2025) gera áudio sincronizado |
+| **Kling** | Kuaishou | Vídeo (+ áudio a partir do 2.6) | N/D (DiT 3D, segundo a empresa) | N/D | N/D | Clipes de 5–10 s, extensíveis até ~3 min; forte em movimento humano |
+| **Runway Gen-4 / 4.5** | Runway | Vídeo | N/D | N/D | N/D | Consistência de personagem e cena por referência; controle de câmera |
+| **Seedance 1.0 → 2.5** | ByteDance Seed | Vídeo (+ áudio a partir do 1.5 pro) | 1.5 pro: DiT de duas ramificações + módulo conjunto; 2.0: arquitetura unificada áudio-vídeo (detalhes N/D) | N/D | N/D | 1.0 (jun/2025) só vídeo; 1.5 pro (dez/2025) áudio-vídeo; 2.0 (fev/2026) referências texto/imagem/áudio/vídeo, 4–15 s; 2.5 (jul/2026) 30 s, até 50 referências |
+| **Google Veo (2 / 3 / 3.1)** | Google DeepMind | Vídeo (+ áudio a partir do Veo 3) | N/D (difusão latente) | N/D | N/D | Veo 3 (mai/2025) com áudio nativo; forte em linguagem de câmera |
 
 ---
 
-## 4. O Mecanismo de Condicionamento de Texto
+## 4. Fundação vs. Produto e o Condicionamento de Texto
 
-### 4.1 Fundação vs. Produto: O Caso de Ecossistemas como Seedance e Nano Banana
+### 4.1 Modelos fundacionais vs. camada de produto
 
-No mercado atual, há uma confusão frequente entre **modelos fundacionais** e **plataformas de produto/estúdios orquestradores**:
+Vale separar quem treina o backbone de quem constrói a esteira em volta dele.
 
-1. **Modelos Fundacionais (como o ByteDance Seedance):**
-   - É um modelo base treinado do zero em clusters de milhares de GPUs.
-   - O **Seedance** (usado no ecossistema Doubao/Dreamina da ByteDance) inovou ao introduzir uma arquitetura **Dual-branch DiT**: enquanto uma ramificação processa os patches espaço-temporais do vídeo, outra ramificação do Transformer gera o áudio (efeitos sonoros, ambiência e fonemas de fala sincronizados) simultaneamente, resolvendo nativamente o problema de lip-sync que antes exigia redes separadas de pós-processamento.
-   - Suporta **Reference-to-Video (R2V)**: além de texto, recebe vídeos de referência para transferir trajetória de câmera ou coreografia física sem distorcer o sujeito.
+1. **Modelos fundacionais (ex.: Seedance, Nano Banana, Veo):**
+   - **Seedance 1.5 pro:** o relatório técnico (arXiv 2512.13507) descreve um DiT de duas ramificações, uma para os latentes de vídeo e outra para os de áudio, ligadas por um módulo cross-modal conjunto, o que dá sincronia de lábios e de efeitos sonoros.
+   - **Seedance 2.0** (arXiv 2604.14148): descrito apenas como "arquitetura unificada" de geração conjunta. Ele e o 2.5 aceitam vídeos de referência para transferir movimento de câmera ou coreografia.
+   - **Nano Banana:** é o modelo de imagem do Gemini, ou seja, geração e edição como capacidade nativa de um modelo multimodal. Não é um orquestrador.
+   - **Áudio nativo** não é exclusividade do Seedance: Veo 3, Sora 2, Wan 2.5 e Kling 2.6 também geram áudio.
 
-2. **Ecossistemas e Orquestradores (como o Nano Banana / CyberBanana):**
-   - Não são necessariamente uma arquitetura matemática isolada treinada do zero em dezenas de milhões de dólares.
-   - Funcionam como **suítes de produção multimodal**: conectam modelos de imagem de ponta (como variantes integradas ao Gemini/Imagen com marca d'água SynthID, Flux ou SDXL com LoRAs de estilo) a pipelines de vídeo de terceiros ou proprietários (como Google Veo, Seedance, MiniMax).
-   - O diferencial técnico desses ecossistemas está no **pipeline de consistência de personagem e controle de cena**: encadeamento de encoders de rosto (IP-Adapter), inpainting guiado por máscara, interpolação de quadros-chave (*first & last frame control*) e filtros de alinhamento estético antes e depois da amostragem.
+2. **Camada de produto e orquestração:**
+   - Sites de terceiros (muitos usando "banana" no nome) e ferramentas como o ComfyUI encadeiam APIs desses modelos.
+   - O diferencial técnico está no **pipeline de consistência de personagem e controle de cena**: encoders de identidade (IP-Adapter), inpainting guiado por máscara, controle de primeiro e último quadro (*first & last frame*) e filtros estéticos antes e depois da amostragem.
+
+### 4.2 Encoders de texto e guidance
 
 A qualidade do resultado visual depende diretamente da capacidade do modelo de compreender o prompt:
 
-1. **CLIP (ViT-L/14):** Excelente para alinhamento geral de estilo e conceitos simples, mas tem contexto limitado (77 tokens) e falha com descrições espaciais complexas ou contagem de objetos.
-2. **T5-XXL / ByT5:** Modelos de linguagem pura com 4,7 bilhões de parâmetros. Conseguem entender gramática detalhada, relações sintáticas intrincadas e grafia exata de palavras para renderização de texto na imagem.
-3. **MLLM (Multimodal Large Language Models):** Utilizados em modelos de vídeo modernos (como HunyuanVideo). O encoder textual é treinado conjuntamente para entender descrições de movimentos temporais compostos ("a pessoa corre, tropeça e a garrafa rola para a esquerda").
+1. **CLIP (ViT-L/14):** bom para alinhamento geral de estilo e conceitos simples, mas tem contexto limitado (77 tokens) e falha com descrições espaciais complexas ou contagem de objetos.
+2. **T5-XXL:** o encoder tem cerca de 4,7B parâmetros (o T5-XXL completo tem 11B). Entende gramática detalhada e relações sintáticas e ajuda na grafia exata de palavras renderizadas na imagem. Variantes multilíngues: umT5 (Wan) e ByT5 (nível de byte, usado para texto em imagem).
+3. **MLLM (Multimodal Large Language Models):** usados como encoder de texto em modelos como o HunyuanVideo. Trazem melhor compreensão de instruções e descrições compostas de movimento ("a pessoa corre, tropeça e a garrafa rola para a esquerda").
 4. **Classifier-Free Guidance (CFG):**
    Durante a inferência, a predição é interpolada entre a saída condicionada ao texto $v_\theta(x_t, t, c)$ e a saída incondicionada $v_\theta(x_t, t, \emptyset)$:
 
@@ -220,12 +239,29 @@ A qualidade do resultado visual depende diretamente da capacidade do modelo de c
 
 ### 5.1 As Métricas de Avaliação
 
-- **FID (*Fréchet Inception Distance*):** Mede a distância entre as distribuições estatísticas de ativação de uma rede Inception-v3 para imagens reais e imagens geradas. Quanto menor, mais realista.
-- **CLIP Score:** Similaridade de cosseno entre o vetor de embedding do texto e o vetor da imagem gerada no espaço do CLIP.
-- **FVD (*Fréchet Video Distance*):** Extensão do FID para sequências temporais usando ativações da rede I3D.
-- **VBench:** Suíte moderna para vídeo que segmenta avaliação em 16 eixos: consistência de identidade de sujeito, consistência de fundo, amplitude de movimento, fidelidade temporal, qualidade estética e adesão física.
+- **FID (*Fréchet Inception Distance*):** distância de Fréchet entre gaussianas ajustadas às ativações da Inception-v3 para imagens reais e geradas. Quanto menor, mais realista.
+- **CLIP Score:** similaridade de cosseno entre o embedding do texto e o da imagem gerada no espaço do CLIP.
+- **FVD (*Fréchet Video Distance*):** extensão do FID para vídeo usando ativações da rede I3D.
+- **VBench:** suíte para vídeo com 16 dimensões, entre elas consistência de sujeito e de fundo, cintilação temporal, suavidade e amplitude de movimento, qualidade estética e de imagem, e aderência semântica (objetos, ações, cor, relações espaciais, estilo). Física e senso comum entram no **VBench-2.0**.
 
 ### 5.2 O Limite da Simulação Física
 Por que modelos de vídeo ainda "alucinam" leis da física?
-- Os modelos **não possuem simuladores newtonianos nem cálculo diferencial de fluidos**. Eles operam sobre densidades de probabilidade no espaço latente.
-- Quando um objeto gira ou passa por trás de outro, o modelo prevê a configuração de patches mais provável segundo o dataset de treino. Se o dataset tem poucas variações daquele ângulo específico ou daquele movimento elástico, a minimização do erro pode gerar interpolações plásticas, membros duplicados ou desaparecimento de objetos.
+- Os modelos **não possuem simuladores newtonianos nem resolvem equações de fluidos**. Eles modelam densidades de probabilidade no espaço latente.
+- Quando um objeto gira ou passa por trás de outro, o modelo prevê a configuração de patches mais provável segundo os dados de treino. Se o dataset tem poucas variações daquele ângulo ou movimento, a minimização do erro pode gerar interpolações plásticas, membros duplicados ou desaparecimento de objetos.
+
+---
+
+## Referências principais
+
+- Ho et al., *Denoising Diffusion Probabilistic Models* (2020). arXiv:2006.11239
+- Song et al., *Denoising Diffusion Implicit Models* (2020). arXiv:2010.02502
+- Rombach et al., *High-Resolution Image Synthesis with Latent Diffusion Models* (2022). arXiv:2112.10752
+- Lipman et al., *Flow Matching for Generative Modeling* (2022). arXiv:2210.02747
+- Liu et al., *Flow Straight and Fast: Rectified Flow* (2022). arXiv:2209.03003
+- Peebles & Xie, *Scalable Diffusion Models with Transformers* (2022). arXiv:2212.09748
+- Esser et al., *Scaling Rectified Flow Transformers for High-Resolution Image Synthesis* (SD3, 2024). arXiv:2403.03206
+- Yang et al., *CogVideoX* (2024). arXiv:2408.06072
+- Kong et al., *HunyuanVideo* (2024). arXiv:2412.03603
+- Wan Team, *Wan: Open and Advanced Large-Scale Video Generative Models* (2025). arXiv:2503.20314
+- ByteDance Seed, *Seedance 1.5 pro* (2025). arXiv:2512.13507
+- ByteDance Seed, *Seedance 2.0* (2026). arXiv:2604.14148

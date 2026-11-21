@@ -6,32 +6,46 @@ Estudo técnico, pesquisa comparativa e experimentos em código sobre como a int
 
 ### Requisitos
 
-- Linux com Python 3.10+
-- PyTorch instalado (`torch`)
+- Python 3.10+
+- PyTorch (a versão CPU basta; os experimentos rodam em menos de um minuto)
 
 ```sh
-git clone /home/ronald/projetos/modelos-geracao-imagem-video.git
+git clone <url-do-repositorio> modelos-geracao-imagem-video
 cd modelos-geracao-imagem-video
-/usr/bin/python3 src/toy_diffusion_vs_flow.py
-/usr/bin/python3 src/spacetime_patching.py
+python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python3 src/toy_diffusion_vs_flow.py
+python3 src/spacetime_patching.py
 ```
 
 ## Estrutura
 
-- `docs/pesquisa-tecnica.md`: levantamento técnico com a matemática de difusão, Flow Matching, 3D VAEs e tabela comparativa dos modelos (Flux, SD3.5, Wan2.1, HunyuanVideo, Sora, Kling).
-- `src/toy_diffusion_vs_flow.py`: implementação minimalista em PyTorch de Flow Matching (Rectified Flow) e medição de curvatura de trajetória por passos de Euler.
-- `src/spacetime_patching.py`: cálculo de dimensionalidade, projeção 3D de patches latentes e análise da redução quadrática de atenção em vídeo.
+- `docs/pesquisa-tecnica.md`: levantamento técnico com a matemática de difusão, Flow Matching, 3D VAEs e tabela comparativa dos modelos (Flux, SD3.5, Nano Banana, Wan2.1, HunyuanVideo, CogVideoX, Sora, Kling, Seedance, Veo).
+- `src/toy_diffusion_vs_flow.py`: compara DDPM (com amostrador DDIM), Rectified Flow e Rectified Flow com reflow em 2D, medindo retidão de trajetória e qualidade por número de passos.
+- `src/spacetime_patching.py`: contagem de tokens e tamanho da matriz de atenção para vídeo, com VAE 3D causal e patches espaço-temporais, e verificação da camada de patchify em PyTorch.
 - `artigo/como_ia_cria_imagens_e_videos.mdx`: artigo completo formatado para o blog pessoal (Astro / Rams.Log).
 
 ## Como funciona
 
 ### `src/toy_diffusion_vs_flow.py`
-O script cria uma distribuição alvo sintética em formato de anel com 8 centros gaussianos. Em vez de usar schedules de ruído curvos de difusão clássica, treina um perceptron multicamadas pequeno para prever o vetor velocidade linear entre ruído padrão e os pontos de dados reais. Depois, executa a integração numérica de Euler para 5, 10, 20 e 50 passos e calcula a curvatura média da trajetória via similaridade de cosseno entre passos consecutivos, demonstrando por que o Flow Matching preserva a geometria da distribuição mesmo com poucos passos de inferência.
+Cria uma distribuição alvo sintética em anel com 8 gaussianas e treina, com o mesmo MLP, três modelos: um DDPM com predição de ruído (amostrado com DDIM determinístico), um Rectified Flow que prevê a velocidade $x_1 - x_0$ e um Rectified Flow retreinado com uma rodada de *reflow* sobre pares (ruído, amostra) gerados pelo primeiro. Mede dois números:
+
+- **Retidão:** comprimento do caminho dividido pela distância entre início e fim, numa trajetória de 200 passos (reta = 1,0).
+- **Precisão:** fração de amostras a menos de 0,3 de algum centro, com 1 a 50 passos.
+
+O resultado mostra que só os caminhos condicionais do Flow Matching são retos. O campo aprendido é curvo (retidão ~1,7, parecida com a do DDIM), mas ainda chega a boa qualidade com menos passos que o DDIM, e o reflow endireita a trajetória (~1,0) a ponto de gerar bem em 1 ou 2 passos.
 
 ### `src/spacetime_patching.py`
-Calcula o número de tokens e o tamanho da matriz de autoatenção para um vídeo de 5 segundos a 24 quadros por segundo em 720p. Compara o método ingênuo de pixels, a difusão latente 2D com extensão temporal e a abordagem com 3D Causal VAE com cubos espaço-temporais de 2x2x2. Em seguida, instancia uma camada convolucional 3D real no PyTorch que fatia um tensor latente de vídeo em tokens prontos para um Transformer, validando as dimensões exatas de saída.
+Calcula tokens e o tamanho da matriz de atenção para um vídeo de 121 quadros (~5 s a 24 fps, no formato $4n+1$ exigido por VAEs causais) em 720p. Compara quatro casos:
+
+- patches de pixels 1×16×16;
+- VAE 2D com patch 1×2×2;
+- VAE 3D causal 4×8×8 com patch 1×2×2 (Wan2.1 / HunyuanVideo);
+- o mesmo latente com patch 2×2×2.
+
+Em seguida, instancia uma `Conv3d` real que fatia o latente em tokens e valida as dimensões de saída.
 
 ## Limitações
 
-- O script de Flow Matching usa uma distribuição bidimensional sintética para fins didáticos e não treina pesos para geração de imagens fotográficas em alta resolução.
-- Não inclui download de checkpoints de 14 bilhões de parâmetros (como Wan2.1 ou HunyuanVideo), focando na matemática e na arquitetura subjacente que cabe em computadores pessoais.
+- Os experimentos de Flow Matching usam uma distribuição bidimensional sintética para fins didáticos; os números não se transferem diretamente para imagens em alta resolução.
+- Não inclui download de checkpoints reais (Wan2.1, HunyuanVideo etc.); o foco é a matemática e a arquitetura que cabem num computador pessoal.
+- Detalhes de modelos fechados (Midjourney, Veo, Kling, Sora, Seedance 2.x, Nano Banana) estão marcados como não divulgados quando o fabricante não publicou a arquitetura.

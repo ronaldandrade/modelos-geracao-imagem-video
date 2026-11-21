@@ -1,6 +1,6 @@
 """Contagem de tokens e tamanho da matriz de atenção para um clipe de vídeo de ~5 s
 em 720p, comparando patches em pixels, VAE 2D e VAE 3D causal (estilo Wan2.1 /
-HunyuanVideo), com patch (1, 2, 2), o usado por esses modelos, e com (2, 2, 2) como hipótese.
+HunyuanVideo), com patch (1, 2, 2), o usado por esses modelos, e com (2, 2, 2), que agrupa também no tempo.
 """
 
 import torch
@@ -59,7 +59,7 @@ def analyze_video_token_explosion():
     _report("2d", tok_2d)
     print(f"3. VAE 3D causal 4x8x8 (latente {t_lat}x{h_lat}x{w_lat}x16) + patch 1x2x2 (Wan2.1 / HunyuanVideo):")
     _report("122", tok_122)
-    print("4. Mesmo latente + patch 2x2x2 (hipotetico, compressao temporal extra no patch):")
+    print("4. Mesmo latente + patch 2x2x2 (patch temporal 2, ex.: CogVideoX 1.5):")
     _report("222", tok_222)
     print("-" * 65)
     print(f"Pixels -> VAE 3D + 1x2x2: sequencia {tok_pixel / tok_122:.1f}x menor, atencao {(tok_pixel / tok_122) ** 2:.1f}x menor")
